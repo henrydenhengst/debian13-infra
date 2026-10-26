@@ -1,0 +1,23 @@
+# --- Ansible runtime & artifacts ---
+*.retry
+.ansible/
+ansible.log
+
+# --- Secrets & vault (nooit committen) ---
+*.vault_pass
+.vault_pass*
+vault_pass.txt
+vault_password*
+*.decrypted
+*.plain
+.env
+.env.*
+
+# --- Editor & OS ruis ---
+*~
+*.swp
+*.swo
+*.bak
+.vscode/
+.idea/
+.DS_Store
