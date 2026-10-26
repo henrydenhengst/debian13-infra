@@ -1,0 +1,10 @@
+// Zet de periodieke taken aan (Dit is meestal al zo, maar expliciet is beter)
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+
+// Optioneel: voorkom automatische reboots (aanbevolen voor een desktop)
+Unattended-Upgrade::Automatic-Reboot "false";
+
+// Optioneel: ruim oude kernels en dependencies op
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
