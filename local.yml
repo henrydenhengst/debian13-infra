@@ -1,4 +1,7 @@
 ---
+# =============================================
+# PLAY 1 — Basislijn
+# =============================================
 - name: Local baseline configuratie Debian 13
   hosts: localhost
   connection: local
@@ -40,7 +43,7 @@
         group: root
         mode: "0644"
 
-    - name: Configureer unattended-upgrades voor stille achtergrondupdates
+    - name: Configureer unattended-upgrades
       ansible.builtin.copy:
         src: files/apt/52unattended-upgrades-local
         dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
@@ -57,3 +60,109 @@
       loop:
         - apt-daily.timer
         - apt-daily-upgrade.timer
+
+# =============================================
+# PLAY 2 — Hardware support
+# =============================================
+- name: Hardware Support & Optimalisatie (Debian 13)
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  tasks:
+    # --- 1. REPOSITORIES ---
+    - name: Activeer contrib, non-free en non-free-firmware
+      ansible.builtin.apt_repository:
+        repo: "deb http://deb.debian.org/debian/ {{ ansible_distribution_release }} main contrib non-free non-free-firmware"
+        state: present
+      register: repo_added
+
+    - name: Update cache als repo is toegevoegd
+      ansible.builtin.apt:
+        update_cache: yes
+      when: repo_added.changed
+
+    # --- 2. CPU MICROCODE (Dynamisch) ---
+    - name: Installeer de juiste CPU microcode
+      ansible.builtin.apt:
+        name: "{{ 'intel-microcode' if 'GenuineIntel' in ansible_processor[2] else 'amd64-microcode' }}"
+        state: present
+
+    # --- 3. CORE FIRMWARE & THERMAL ---
+    - name: Installeer basis firmware en thermisch beheer
+      ansible.builtin.apt:
+        name:
+          - firmware-misc-nonfree
+          - thermald
+        state: present
+
+    # --- 4. NETWERK & BLUETOOTH ---
+    - name: Installeer Wi-Fi en Bluetooth drivers
+      ansible.builtin.apt:
+        name:
+          - firmware-iwlwifi
+          - firmware-brcm80211
+          - firmware-realtek
+          - firmware-atheros
+          - bluez-firmware
+          - bluetooth
+        state: present
+
+    # --- 5. GRAFISCH & INPUT ---
+    - name: Installeer GPU versnelling en Touchpad support
+      ansible.builtin.apt:
+        name:
+          - firmware-amd-graphics
+          - mesa-utils
+          - va-driver-all
+          - xserver-xorg-input-libinput
+        state: present
+
+    # --- 6. AUDIO & WEBCAM ---
+    - name: Installeer Audio (SOF) en Webcam tools
+      ansible.builtin.apt:
+        name:
+          - firmware-sof-signed
+          - alsa-utils
+          - guvcview
+          - v4l-utils
+        state: present
+
+    # --- 7. BESTANDSSYSTEEM & SMARTCARD ---
+    - name: Installeer NTFS, exFAT en Smartcard support
+      ansible.builtin.apt:
+        name:
+          - ntfs-3g
+          - exfatprogs
+          - pcscd
+          - pcsc-tools
+          - opensc
+        state: present
+
+    - name: Zorg dat Smartcard service draait
+      ansible.builtin.systemd:
+        name: pcscd
+        state: started
+        enabled: yes
+
+    # --- 8. LAPTOP OPTIMALISATIE ---
+    - name: Installeer TLP voor batterijbeheer
+      ansible.builtin.apt:
+        name:
+          - tlp
+          - tlp-rdw
+        state: present
+
+    - name: Start TLP service
+      ansible.builtin.systemd:
+        name: tlp
+        state: started
+        enabled: yes
+
+    # --- 9. GEBRUIKERSRECHTEN ---
+    - name: Voeg desktopgebruiker toe aan hardware-groepen
+      ansible.builtin.user:
+        name: "{{ ansible_env.SUDO_USER | default('henry') }}"
+        groups: video,lp,plugdev,bluetooth,audio
+        append: true
