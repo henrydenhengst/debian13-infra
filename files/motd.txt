@@ -1,0 +1,2 @@
+mkdir -p files
+echo "Dit systeem wordt beheerd door ansible-pull." > files/motd.txt
