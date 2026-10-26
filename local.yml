@@ -164,7 +164,7 @@
     # --- 9. GEBRUIKERSRECHTEN ---
     - name: Voeg desktopgebruiker toe aan hardware-groepen
       ansible.builtin.user:
-        name: "{{ 'henry' if ansible_env.SUDO_USER | default('root') == 'root' else ansible_env.SUDO_USER }}"
+        name: "{{ desktop_user | default('freeboot') }}"
         groups: video,lp,plugdev,bluetooth,audio
         append: true
 
@@ -223,7 +223,7 @@
           - network-manager-gnome
           - gnome-terminal
           - nemo
-          - gvfs-fuse              # Prullenbak en externe schijven in Nemo
+          - gvfs-fuse                  # Prullenbak en externe schijven in Nemo
           - gstreamer1.0-plugins-good  # Audio/video previews
         state: present
 
@@ -415,4 +415,4 @@
     - name: Installeer File Roller
       ansible.builtin.apt:
         name: file-roller
-        state: present 
+        state: present
