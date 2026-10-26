@@ -166,3 +166,104 @@
         name: "{{ ansible_env.SUDO_USER | default('henry') }}"
         groups: video,lp,plugdev,bluetooth,audio
         append: true
+
+
+# =============================================
+# PLAY 3 — Cinnamon desktop & essentials
+# =============================================
+- name: Cinnamon desktopomgeving en essentiële applicaties
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+    # --- 1. XORG + LIGHTDM ---
+    - name: Installeer Xorg en LightDM
+      ansible.builtin.apt:
+        name:
+          - xserver-xorg
+          - xinit
+          - lightdm
+          - lightdm-gtk-greeter
+          - slick-greeter        # Mooiere greeter, past bij Cinnamon
+        state: present
+
+    - name: Zet LightDM als standaard display manager
+      ansible.builtin.debconf:
+        name: lightdm
+        question: shared/default-x-display-manager
+        vtype: select
+        value: lightdm
+
+    # --- 2. CINNAMON ---
+    - name: Installeer Cinnamon desktop
+      ansible.builtin.apt:
+        name:
+          - cinnamon
+          - cinnamon-l10n
+          - cinnamon-core
+          - network-manager-gnome
+          - gnome-terminal
+          - nemo
+        state: present
+
+    # --- 3. AUDIO (PipeWire) ---
+    - name: Installeer PipeWire audio-stack
+      ansible.builtin.apt:
+        name:
+          - pipewire
+          - pipewire-audio
+          - wireplumber
+          - pavucontrol
+        state: present
+
+    # --- 4. FONTS ---
+    - name: Installeer basisfonts
+      ansible.builtin.apt:
+        name:
+          - fonts-dejavu
+          - fonts-noto
+          - fonts-liberation
+        state: present
+
+    # --- 5. ESSENTIËLE APPLICATIES ---
+    - name: Installeer kantoor- en document-applicaties
+      ansible.builtin.apt:
+        name:
+          - libreoffice
+          - libreoffice-gtk3       # Betere integratie met Cinnamon
+          - evince
+        state: present
+
+    # --- 6. CLI-TOOLS ---
+    - name: Installeer CLI-tools
+      ansible.builtin.apt:
+        name:
+          - git
+          - vim
+          - htop
+          - curl
+          - wget
+        state: present
+
+    # --- 7. ARCHIEFTOOLS (Debian 13-correct) ---
+    - name: Installeer archiveringstools
+      ansible.builtin.apt:
+        name:
+          - zip
+          - unzip
+          - 7zip                 # Vervanger van p7zip-full in Debian 13
+          - xz-utils
+          - zstd
+          - unrar-free
+          - cabextract
+          - arj
+          - lhasa                # Vervanger van lha
+        state: present
+
+    # --- 8. LIGHTDM ACTIVEREN ---
+    - name: Activeer en start LightDM
+      ansible.builtin.systemd:
+        name: lightdm
+        state: started
+        enabled: yes
