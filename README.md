@@ -18,7 +18,7 @@ De `local.yml` bestaat uit vier plays:
 
 ## 📂 Repository-structuur
 
-```
+```text
 
 debian13-infra/
 ├── local.yml                                  # Hoofd-playbook (4 plays)
