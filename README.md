@@ -129,7 +129,3 @@ about\:policies
 - `ttf-mscorefonts-installer` downloadt fonts tijdens de installatie. Zonder internet faalt deze taak.
 - `cups-browsed` is verouderd; op moderne netwerken kan het printerdetectie verstoren. Verwijderen mag.
 - `unrar-free` ondersteunt geen RAR5-archieven. Voor volledige support: gebruik `unrar` uit non-free.
-
-## 📜 Licentie
-
-Persoonlijk project — geen licentie. Gebruik op eigen risico.
