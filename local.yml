@@ -77,7 +77,7 @@
         repo: "deb http://deb.debian.org/debian/ {{ ansible_distribution_release }} main contrib non-free non-free-firmware"
         state: present
 
-    - name: Update apt cache (altijd, met geldigheidsduur)
+    - name: Update apt cache (met geldigheidsduur)
       ansible.builtin.apt:
         update_cache: yes
         cache_valid_time: 3600
@@ -242,12 +242,28 @@
           - fonts-liberation
         state: present
 
+    - name: Accepteer Microsoft EULA voor ttf-mscorefonts
+      community.general.debconf:
+        name: ttf-mscorefonts-installer
+        question: msttcorefonts/accepted-mscorefonts-eula
+        vtype: select
+        value: "true"
+
+    - name: Installeer Microsoft-kernfonts en vrije alternatieven
+      ansible.builtin.apt:
+        name:
+          - ttf-mscorefonts-installer
+          - fonts-crosextra-carlito
+          - fonts-crosextra-caladea
+        state: present
+
     # --- 5. ESSENTIËLE APPLICATIES ---
     - name: Installeer kantoor- en document-applicaties
       ansible.builtin.apt:
         name:
           - libreoffice
           - libreoffice-gtk3
+          - libreoffice-l10n-nl
           - evince
         state: present
 
@@ -277,7 +293,33 @@
           - lhasa
         state: present
 
-    # --- 8. LIGHTDM ACTIVEREN ---
+    # --- 8. UFW FIREWALL ---
+    - name: Installeer UFW
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+
+    - name: Stel standaard inkomend beleid in op 'deny'
+      community.general.ufw:
+        default: deny
+        direction: incoming
+
+    - name: Stel standaard uitgaand beleid in op 'allow'
+      community.general.ufw:
+        default: allow
+        direction: outgoing
+
+    - name: Sta SSH toe (poort 22) om lock-out te voorkomen
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    - name: Schakel de UFW-firewall in
+      community.general.ufw:
+        state: enabled
+
+    # --- 9. LIGHTDM ACTIVEREN ---
     - name: Activeer en start LightDM
       ansible.builtin.systemd:
         name: lightdm
