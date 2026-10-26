@@ -1,4 +1,3 @@
-```markdown
 # debian13-infra
 
 Ansible-pull baseline en post-install configuratie voor **Debian 13 (Trixie)** desktops.
@@ -7,7 +6,7 @@ Dit is geen traditionele Ansible-repo met een inventory en push-model. In plaats
 
 ## 📋 Wat dit doet
 
-De `local.yml` bestaat uit vier plays:
+Het `local.yml` bestaat uit vier plays:
 
 | Play | Doel |
 |---|---|
@@ -18,18 +17,17 @@ De `local.yml` bestaat uit vier plays:
 
 ## 📂 Repository-structuur
 
-```text
-
+```
 debian13-infra/
-├── local.yml                                  # Hoofd-playbook (4 plays)
+├── local.yml                              # Hoofd-playbook (4 plays)
 ├── README.md
 ├── .gitignore
 └── files/
-├── motd.txt                               # Bericht van de dag
-├── firefox/
-│   └── policies.json                      # uBlock Origin + freeboot.nl startpagina
-└── apt/
-└── 52unattended-upgrades-local        # Stille achtergrondupdates
+    ├── motd.txt                           # Bericht van de dag
+    ├── firefox/
+    │   └── policies.json                  # uBlock Origin + freeboot.nl startpagina
+    └── apt/
+        └── 52unattended-upgrades-local    # Stille achtergrondupdates
 ```
 
 ## 🚀 Gebruik
@@ -48,11 +46,11 @@ sudo ansible-pull \
   local.yml
 ```
 
-· -C main — de branch die wordt uitgecheckt
-· -i localhost, — impliciete inventory (let op de komma)
-· -e desktop_user=henry — de gebruiker die in de hardware-groepen wordt gezet
+- `-C main` — de branch die wordt uitgecheckt
+- `-i localhost,` — impliciete inventory (let op de komma)
+- `-e desktop_user=henry` — de gebruiker die in de hardware-groepen wordt gezet
 
-Tijdens een preseed-installatie
+### Tijdens een preseed-installatie
 
 De preseed voert ansible-pull automatisch uit aan het einde van de Debian-installatie:
 
@@ -64,42 +62,43 @@ in-target sh -c 'DEBIAN_FRONTEND=noninteractive ansible-pull \
   local.yml 2>&1 | tee /var/log/ansible-pull.log; exit ${PIPESTATUS[0]}'
 ```
 
-Output komt terecht in /var/log/ansible-pull.log in het nieuwe systeem.
+Output komt terecht in `/var/log/ansible-pull.log` in het nieuwe systeem.
 
-🔧 Vereisten
+## 🔧 Vereisten
 
-· Debian 13 (Trixie)
-· ansible (bevat ansible-pull)
-· git
-· Collectie community.general (voor debconf en ufw):
+- Debian 13 (Trixie)
+- `ansible` (bevat `ansible-pull`)
+- `git`
+- Collectie `community.general` (voor `debconf` en `ufw`):
 
 ```bash
 ansible-galaxy collection install community.general
 ```
 
-Het ansible-pakket uit Debian bevat deze collectie standaard. Alleen bij een ansible-core-only installatie moet je hem los installeren.
+Het `ansible`-pakket uit Debian bevat deze collectie standaard. Alleen bij een `ansible-core`-only installatie moet je hem los installeren.
 
-🔒 Secrets
+## 🔒 Secrets
 
-Er horen geen secrets in deze repository.
+Er horen **geen secrets** in deze repository.
 
 Dit is een desktop-baseline, geen fleet-beheer. Geheimen zoals SSH-sleutels, WiFi-wachtwoorden, tokens of wachtwoorden worden lokaal gegenereerd of ingevoerd, niet via Ansible uitgerold.
 
-De .gitignore blokkeert de meest voorkomende valkuilen (*.vault_pass, .env, vault_pass.txt, etc.).
+De `.gitignore` blokkeert de meest voorkomende valkuilen (`*.vault_pass`, `.env`, `vault_pass.txt`, etc.).
 
-✏️ Aanpassen
+## ✏️ Aanpassen
 
 De belangrijkste variabelen die je mogelijk wilt wijzigen:
 
-Variabele Waar Default
-desktop_user Play 2, taak 9 freeboot
-Firefox startpagina files/firefox/policies.json https://freeboot.nl
-MOTD-tekst files/motd.txt —
-Update-gedrag files/apt/52unattended-upgrades-local auto-reboot uit
+| Variabele | Waar | Default |
+|---|---|---|
+| `desktop_user` | Play 2, taak 9 | `freeboot` |
+| Firefox startpagina | `files/firefox/policies.json` | `https://freeboot.nl` |
+| MOTD-tekst | `files/motd.txt` | — |
+| Update-gedrag | `files/apt/52unattended-upgrades-local` | auto-reboot uit |
 
-Na een wijziging: committen, pushen, en de volgende ansible-pull-run pakt het automatisch op.
+Na een wijziging: committen, pushen, en de volgende `ansible-pull`-run pakt het automatisch op.
 
-🔍 Verifiëren na een run
+## 🔍 Verifiëren na een run
 
 ```bash
 # Microcode (precies één van de twee)
@@ -121,28 +120,16 @@ systemctl status lightdm cups apparmor
 id freeboot
 
 # Firefox policies (in Firefox)
-about:policies
+about\:policies
 ```
 
-⚠️ Bekende beperkingen
+## ⚠️ Bekende beperkingen
 
-· /dev/sda in de preseed: werkt op SATA, niet op NVMe (/dev/nvme0n1). Laat partman-auto/disk en grub-installer/bootdev weg voor een universele preseed.
-· ttf-mscorefonts-installer downloadt fonts tijdens de installatie. Zonder internet faalt deze taak.
-· cups-browsed is verouderd; op moderne netwerken kan het printerdetectie verstoren. Verwijderen mag.
-· unrar-free ondersteunt geen RAR5-archieven. Voor volledige support: gebruik unrar uit non-free.
+- `/dev/sda` in de preseed: werkt op SATA, niet op NVMe (`/dev/nvme0n1`). Laat `partman-auto/disk` en `grub-installer/bootdev` weg voor een universele preseed.
+- `ttf-mscorefonts-installer` downloadt fonts tijdens de installatie. Zonder internet faalt deze taak.
+- `cups-browsed` is verouderd; op moderne netwerken kan het printerdetectie verstoren. Verwijderen mag.
+- `unrar-free` ondersteunt geen RAR5-archieven. Voor volledige support: gebruik `unrar` uit non-free.
 
-📜 Licentie
+## 📜 Licentie
 
 Persoonlijk project — geen licentie. Gebruik op eigen risico.
-
-```
-
-Dit is de ruwe markdown. Kopieer de inhoud van het blok naar `README.md` in je repo:
-
-```bash
-nano README.md
-# plak de inhoud
-git add README.md
-git commit -m "README: documentatie voor repo, gebruik en verificatie"
-git push origin main
-```
