@@ -68,8 +68,8 @@
 - name: Hardware Support & Optimalisatie (Debian 13)
   hosts: localhost
   connection: local
-  gather_facts: yes
-  become: yes
+  gather_facts: true
+  become: true
 
   tasks:
     # --- 1. REPOSITORIES ---
@@ -77,16 +77,17 @@
       ansible.builtin.apt_repository:
         repo: "deb http://deb.debian.org/debian/ {{ ansible_distribution_release }} main contrib non-free non-free-firmware"
         state: present
+      register: repo_added
 
-    - name: Update apt cache (met geldigheidsduur)
+    - name: Update apt cache na repo-wijziging
       ansible.builtin.apt:
-        update_cache: yes
-        cache_valid_time: 3600
+        update_cache: true
+      when: repo_added.changed
 
     # --- 2. CPU MICROCODE (Dynamisch) ---
     - name: Installeer de juiste CPU microcode
       ansible.builtin.apt:
-        name: "{{ 'intel-microcode' if 'GenuineIntel' in ansible_processor[2] else 'amd64-microcode' }}"
+        name: "{{ 'intel-microcode' if 'GenuineIntel' in ansible_processor else 'amd64-microcode' }}"
         state: present
 
     # --- 3. CORE FIRMWARE & THERMAL ---
@@ -144,7 +145,7 @@
       ansible.builtin.systemd:
         name: pcscd
         state: started
-        enabled: yes
+        enabled: true
 
     # --- 8. LAPTOP OPTIMALISATIE ---
     - name: Installeer TLP voor batterijbeheer
@@ -158,7 +159,7 @@
       ansible.builtin.systemd:
         name: tlp
         state: started
-        enabled: yes
+        enabled: true
 
     # --- 9. GEBRUIKERSRECHTEN ---
     - name: Voeg desktopgebruiker toe aan hardware-groepen
@@ -309,7 +310,7 @@
       ansible.builtin.systemd:
         name: apparmor
         state: started
-        enabled: yes
+        enabled: true
 
     # --- 9. SECURITY: UFW FIREWALL ---
     - name: Installeer UFW
@@ -352,15 +353,13 @@
       ansible.builtin.systemd:
         name: lightdm
         state: started
-        enabled: yes
+        enabled: true
 
   handlers:
     - name: Herstart LightDM
       ansible.builtin.systemd:
         name: lightdm
         state: restarted
-
-
 
 # =============================================
 # PLAY 4 — Dagelijks gebruik
@@ -384,7 +383,7 @@
       ansible.builtin.systemd:
         name: cups
         state: started
-        enabled: yes
+        enabled: true
 
     # --- 2. BLUETOOTH GUI ---
     - name: Installeer Blueman
