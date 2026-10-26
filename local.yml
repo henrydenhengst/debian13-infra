@@ -76,12 +76,11 @@
       ansible.builtin.apt_repository:
         repo: "deb http://deb.debian.org/debian/ {{ ansible_distribution_release }} main contrib non-free non-free-firmware"
         state: present
-      register: repo_added
 
-    - name: Update cache als repo is toegevoegd
+    - name: Update apt cache (altijd, met geldigheidsduur)
       ansible.builtin.apt:
         update_cache: yes
-      when: repo_added.changed
+        cache_valid_time: 3600
 
     # --- 2. CPU MICROCODE (Dynamisch) ---
     - name: Installeer de juiste CPU microcode
@@ -163,10 +162,9 @@
     # --- 9. GEBRUIKERSRECHTEN ---
     - name: Voeg desktopgebruiker toe aan hardware-groepen
       ansible.builtin.user:
-        name: "{{ ansible_env.SUDO_USER | default('henry') }}"
+        name: "{{ 'henry' if ansible_env.SUDO_USER | default('root') == 'root' else ansible_env.SUDO_USER }}"
         groups: video,lp,plugdev,bluetooth,audio
         append: true
-
 
 # =============================================
 # PLAY 3 — Cinnamon desktop & essentials
@@ -184,16 +182,35 @@
           - xserver-xorg
           - xinit
           - lightdm
-          - lightdm-gtk-greeter
-          - slick-greeter        # Mooiere greeter, past bij Cinnamon
+          - slick-greeter
         state: present
 
     - name: Zet LightDM als standaard display manager
-      ansible.builtin.debconf:
-        name: lightdm
-        question: shared/default-x-display-manager
-        vtype: select
-        value: lightdm
+      ansible.builtin.copy:
+        content: "/usr/sbin/lightdm\n"
+        dest: /etc/X11/default-display-manager
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Zorg dat lightdm.conf.d directory bestaat
+      ansible.builtin.file:
+        path: /etc/lightdm/lightdm.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Configureer slick-greeter als LightDM greeter
+      ansible.builtin.copy:
+        content: |
+          [Seat:*]
+          greeter-session=slick-greeter
+        dest: /etc/lightdm/lightdm.conf.d/50-slick-greeter.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Herstart LightDM
 
     # --- 2. CINNAMON ---
     - name: Installeer Cinnamon desktop
@@ -201,7 +218,6 @@
         name:
           - cinnamon
           - cinnamon-l10n
-          - cinnamon-core
           - network-manager-gnome
           - gnome-terminal
           - nemo
@@ -231,7 +247,7 @@
       ansible.builtin.apt:
         name:
           - libreoffice
-          - libreoffice-gtk3       # Betere integratie met Cinnamon
+          - libreoffice-gtk3
           - evince
         state: present
 
@@ -252,13 +268,13 @@
         name:
           - zip
           - unzip
-          - 7zip                 # Vervanger van p7zip-full in Debian 13
+          - 7zip
           - xz-utils
           - zstd
           - unrar-free
           - cabextract
           - arj
-          - lhasa                # Vervanger van lha
+          - lhasa
         state: present
 
     # --- 8. LIGHTDM ACTIVEREN ---
@@ -267,3 +283,9 @@
         name: lightdm
         state: started
         enabled: yes
+
+  handlers:
+    - name: Herstart LightDM
+      ansible.builtin.systemd:
+        name: lightdm
+        state: restarted
