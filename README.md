@@ -130,7 +130,7 @@ about\:policies
 - **Printen**: `cups-browsed` is bewust weggelaten. De moderne driverless printing-stack (`avahi-daemon` + `ipp-usb`) dekt de meeste netwerk- en USB-printers.
 - **RAR**: `unrar` en `unrar-free` zijn niet opgenomen. Gebruik `7zip` voor RAR-bestanden (`7z x bestand.rar`), dat RAR5 ondersteunt.
 
-# 🛠️ Werkinstructie: Debian 13 met preseed via netboot.xyz 3.0.3
+## 🛠️ Werkinstructie: Debian 13 met preseed via netboot.xyz 3.0.3
 
 ## Doel
 
