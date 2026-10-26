@@ -359,3 +359,61 @@
       ansible.builtin.systemd:
         name: lightdm
         state: restarted
+
+
+
+# =============================================
+# PLAY 4 — Dagelijks gebruik
+# =============================================
+- name: Dagelijkse gebruikerslaag
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+    # --- 1. PRINTEN ---
+    - name: Installeer CUPS en printerconfiguratie
+      ansible.builtin.apt:
+        name:
+          - cups
+          - cups-browsed
+          - system-config-printer
+        state: present
+
+    - name: Zorg dat CUPS draait
+      ansible.builtin.systemd:
+        name: cups
+        state: started
+        enabled: yes
+
+    # --- 2. BLUETOOTH GUI ---
+    - name: Installeer Blueman
+      ansible.builtin.apt:
+        name: blueman
+        state: present
+
+    # --- 3. MEDIA ---
+    - name: Installeer VLC
+      ansible.builtin.apt:
+        name:
+          - vlc
+          - vlc-l10n
+        state: present
+
+    # --- 4. WACHTWOORDKLUIS ---
+    - name: Installeer KeePassXC
+      ansible.builtin.apt:
+        name: keepassxc
+        state: present
+
+    # --- 5. SCREENSHOTS ---
+    - name: Installeer Flameshot
+      ansible.builtin.apt:
+        name: flameshot
+        state: present
+
+    # --- 6. ARCHIEF-GUI ---
+    - name: Installeer File Roller
+      ansible.builtin.apt:
+        name: file-roller
+        state: present
