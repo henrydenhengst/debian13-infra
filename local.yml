@@ -282,7 +282,7 @@
           - wget
         state: present
 
-    # --- 7. ARCHIEFTOOLS (Debian 13-correct) ---
+    # --- 7. ARCHIEFTOOLS (zonder RAR) ---
     - name: Installeer archiveringstools
       ansible.builtin.apt:
         name:
@@ -291,7 +291,6 @@
           - 7zip
           - xz-utils
           - zstd
-          - unrar-free
           - cabextract
           - arj
           - lhasa
@@ -370,18 +369,25 @@
   become: true
 
   tasks:
-    # --- 1. PRINTEN ---
-    - name: Installeer CUPS en printerconfiguratie
+    # --- 1. PRINTEN (driverless) ---
+    - name: Installeer CUPS en moderne driverless printing
       ansible.builtin.apt:
         name:
           - cups
-          - cups-browsed
+          - avahi-daemon      # mDNS discovery voor netwerkprinters
+          - ipp-usb           # Driverless printing voor USB-printers
           - system-config-printer
         state: present
 
     - name: Zorg dat CUPS draait
       ansible.builtin.systemd:
         name: cups
+        state: started
+        enabled: true
+
+    - name: Zorg dat Avahi draait (netwerkprinterdetectie)
+      ansible.builtin.systemd:
+        name: avahi-daemon
         state: started
         enabled: true
 
