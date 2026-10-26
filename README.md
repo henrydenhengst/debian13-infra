@@ -125,7 +125,7 @@ about\:policies
 
 ## ⚠️ Bekende beperkingen
 
-- `/dev/sda` in de preseed: werkt op SATA, niet op NVMe (`/dev/nvme0n1`). Laat `partman-auto/disk` en `grub-installer/bootdev` weg voor een universele preseed.
-- `ttf-mscorefonts-installer` downloadt fonts tijdens de installatie. Zonder internet faalt deze taak.
-- `cups-browsed` is verouderd; op moderne netwerken kan het printerdetectie verstoren. Verwijderen mag.
-- `unrar-free` ondersteunt geen RAR5-archieven. Voor volledige support: gebruik `unrar` uit non-free.
+- **Schijfdetectie in de preseed**: De preseed detecteert dynamisch de eerste *niet-USB* schijf via `list-devices usb-partition` en `grep -v`. Dit werkt voor SATA (`/dev/sda`) en NVMe (`/dev/nvme0n1`). De USB-stick waar de installer vanaf boot wordt dus automatisch genegeerd. Uitzondering: een interne schijf in een USB-behuizing kan ten onrechte worden uitgesloten.
+- **`ttf-mscorefonts-installer`** downloadt fonts tijdens de installatie. Zonder internet faalt deze taak.
+- **Printen**: `cups-browsed` is bewust weggelaten. De moderne driverless printing-stack (`avahi-daemon` + `ipp-usb`) dekt de meeste netwerk- en USB-printers.
+- **RAR**: `unrar` en `unrar-free` zijn niet opgenomen. Gebruik `7zip` voor RAR-bestanden (`7z x bestand.rar`), dat RAR5 ondersteunt.
