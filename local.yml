@@ -16,6 +16,7 @@
           - unattended-upgrades
           - git
           - firefox-esr
+          - anacron              # Zorgt dat periodieke taken ook draaien als de PC uit stond
         state: present
         update_cache: true
 
@@ -221,6 +222,8 @@
           - network-manager-gnome
           - gnome-terminal
           - nemo
+          - gvfs-fuse              # Prullenbak en externe schijven in Nemo
+          - gstreamer1.0-plugins-good  # Audio/video previews
         state: present
 
     # --- 3. AUDIO (PipeWire) ---
@@ -293,7 +296,22 @@
           - lhasa
         state: present
 
-    # --- 8. UFW FIREWALL ---
+    # --- 8. SECURITY: APPARMOR ---
+    - name: Installeer AppArmor (userspace tools + extra profielen)
+      ansible.builtin.apt:
+        name:
+          - apparmor
+          - apparmor-profiles
+          - apparmor-utils
+        state: present
+
+    - name: Zorg dat AppArmor actief is
+      ansible.builtin.systemd:
+        name: apparmor
+        state: started
+        enabled: yes
+
+    # --- 9. SECURITY: UFW FIREWALL ---
     - name: Installeer UFW
       ansible.builtin.apt:
         name: ufw
@@ -319,7 +337,17 @@
       community.general.ufw:
         state: enabled
 
-    # --- 9. LIGHTDM ACTIVEREN ---
+    # --- 10. NICE-TO-HAVES ---
+    - name: Installeer extra handige tools
+      ansible.builtin.apt:
+        name:
+          - fwupd                # Firmware-updates via LVFS (BIOS, SSD)
+          - timeshift            # Systeem-backups voor je desktop
+          - gnome-keyring        # Wachtwoordbeheer voor browsers/apps
+          - needrestart          # Waarschuwt na updates welke services herstart moeten
+        state: present
+
+    # --- 11. LIGHTDM ACTIVEREN ---
     - name: Activeer en start LightDM
       ansible.builtin.systemd:
         name: lightdm
