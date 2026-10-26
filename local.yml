@@ -12,6 +12,7 @@
           - htop
           - unattended-upgrades
           - git
+          - firefox-esr
         state: present
         update_cache: true
 
@@ -19,6 +20,22 @@
       ansible.builtin.copy:
         src: files/motd.txt
         dest: /etc/motd
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Firefox policies-directory aanmaken
+      ansible.builtin.file:
+        path: /etc/firefox/policies
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Firefox policies plaatsen (uBlock Origin + startpagina)
+      ansible.builtin.copy:
+        src: files/firefox/policies.json
+        dest: /etc/firefox/policies/policies.json
         owner: root
         group: root
         mode: "0644"
