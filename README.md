@@ -30,7 +30,6 @@ debian13-infra/
 │   └── policies.json                      # uBlock Origin + freeboot.nl startpagina
 └── apt/
 └── 52unattended-upgrades-local        # Stille achtergrondupdates
-
 ```
 
 ## 🚀 Gebruik
