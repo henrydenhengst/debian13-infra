@@ -1,0 +1,24 @@
+---
+- name: Local baseline configuratie Debian 13
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+    - name: Basispakketten installeren
+      ansible.builtin.apt:
+        name:
+          - curl
+          - htop
+          - unattended-upgrades
+          - git
+        state: present
+        update_cache: true
+
+    - name: MOTD plaatsen
+      ansible.builtin.copy:
+        src: files/motd.txt
+        dest: /etc/motd
+        owner: root
+        group: root
+        mode: "0644"
