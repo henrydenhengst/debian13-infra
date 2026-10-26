@@ -40,21 +40,20 @@
         group: root
         mode: "0644"
 
-  - name: Configureer unattended-upgrades voor stille achtergrondupdates
-    ansible.builtin.copy:
-      src: files/apt/52unattended-upgrades-local
-      dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
-      owner: root
-      group: root
-      mode: '0644'
-    notify: Herstart apt-daily timers
+    - name: Configureer unattended-upgrades voor stille achtergrondupdates
+      ansible.builtin.copy:
+        src: files/apt/52unattended-upgrades-local
+        dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Herstart apt-daily timers
 
-handlers:
-  - name: Herstart apt-daily timers
-    ansible.builtin.systemd:
-      name: "{{ item }}"
-      state: restarted
-      daemon_reload: true
-    loop:
-      - apt-daily.timer
-      - apt-daily-upgrade.timer
+  handlers:
+    - name: Herstart apt-daily timers
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
