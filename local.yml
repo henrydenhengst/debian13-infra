@@ -215,6 +215,34 @@
         groups: video,lp,plugdev,bluetooth,audio
         append: true
 
+    # --- 10. HARDWARE-RAPPORT ---
+    - name: Installeer lshw
+      ansible.builtin.apt:
+        name: lshw
+        state: present
+
+    - name: Zoek bestaand hardware-rapport
+      ansible.builtin.find:
+        paths: "/home/{{ desktop_user }}"
+        patterns: "FreeBoot*.txt"
+      register: lshw_existing
+
+    - name: Maak hardware-rapport met lshw
+      ansible.builtin.command: lshw
+      register: lshw_output
+      changed_when: false
+      when: lshw_existing.matched == 0
+
+    - name: Schrijf rapport weg in de home-directory
+      ansible.builtin.copy:
+        content: "{{ lshw_output.stdout }}\n"
+        dest: "/home/{{ desktop_user }}/FreeBoot{{ 999999 | random(start=100000) }}.txt"
+        owner: "{{ desktop_user }}"
+        group: "{{ desktop_user }}"
+        mode: "0644"
+      when: lshw_existing.matched == 0
+
+
 # =============================================
 # PLAY 3 — Cinnamon desktop & essentials
 # =============================================
