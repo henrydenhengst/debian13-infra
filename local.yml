@@ -406,6 +406,75 @@
         name: lightdm
         enabled: true
 
+    # --- 12. WALLPAPER ---
+    - name: Installeer dconf-tools en webp-ondersteuning
+      ansible.builtin.apt:
+        name:
+          - dconf-cli
+          - webp-pixbuf-loader   # Nodig om .webp als achtergrond te tonen
+        state: present
+
+    - name: Maak wallpaper-directory aan
+      ansible.builtin.file:
+        path: /usr/share/backgrounds/freeboot
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download wallpaper
+      ansible.builtin.get_url:
+        url: https://freeboot.nl/images/wallpaper.webp
+        dest: /usr/share/backgrounds/freeboot/wallpaper.webp
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Zorg dat dconf een systeemdatabase gebruikt
+      ansible.builtin.copy:
+        content: |
+          user-db:user
+          system-db:local
+        dest: /etc/dconf/profile/user
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Zorg dat dconf local.d directory bestaat
+      ansible.builtin.file:
+        path: /etc/dconf/db/local.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Stel wallpaper in als Cinnamon-standaard
+      ansible.builtin.copy:
+        content: |
+          [org/cinnamon/desktop/background]
+          picture-uri='file:///usr/share/backgrounds/freeboot/wallpaper.webp'
+          picture-options='zoom'
+        dest: /etc/dconf/db/local.d/00-wallpaper
+        owner: root
+        group: root
+        mode: "0644"
+      register: dconf_wallpaper
+
+    - name: Werk de dconf-database bij
+      ansible.builtin.command: dconf update
+      when: dconf_wallpaper is changed
+
+    - name: Zet dezelfde wallpaper op het inlogscherm (slick-greeter)
+      ansible.builtin.copy:
+        content: |
+          [Greeter]
+          background=/usr/share/backgrounds/freeboot/wallpaper.webp
+        dest: /etc/lightdm/slick-greeter.conf
+        owner: root
+        group: root
+        mode: "0644"
+
+
 # =============================================
 # PLAY 4 — Dagelijks gebruik
 # =============================================
