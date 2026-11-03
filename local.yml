@@ -1,4 +1,12 @@
 ---
+# Vereist: community.general collection
+#   sudo apt install ansible        (bevat de collections)
+#   of: ansible-galaxy collection install community.general
+#
+# Gebruik:
+#   ansible-playbook playbook.yml --check --diff
+#   ansible-playbook playbook.yml -e desktop_user=jouwnaam
+
 # =============================================
 # PLAY 1 — Basislijn
 # =============================================
@@ -16,9 +24,9 @@
           - unattended-upgrades
           - git
           - firefox-esr
-          - anacron              # Zorgt dat periodieke taken ook draaien als de PC uit stond
         state: present
         update_cache: true
+        cache_valid_time: 3600
 
     - name: MOTD plaatsen
       ansible.builtin.copy:
@@ -71,12 +79,28 @@
   gather_facts: true
   become: true
 
+  vars:
+    desktop_user: freeboot
+
   tasks:
-    # --- 1. REPOSITORIES ---
+    # --- 1. REPOSITORIES (deb822-formaat van Debian 13) ---
+    - name: Controleer of debian.sources bestaat
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/debian.sources
+      register: debian_sources
+
+    - name: Stop als de deb822-bronnen ontbreken
+      ansible.builtin.fail:
+        msg: >-
+          /etc/apt/sources.list.d/debian.sources niet gevonden.
+          Pas de repo-taak aan voor jouw situatie (bijv. klassieke sources.list).
+      when: not debian_sources.stat.exists
+
     - name: Activeer contrib, non-free en non-free-firmware
-      ansible.builtin.apt_repository:
-        repo: "deb http://deb.debian.org/debian/ {{ ansible_distribution_release }} main contrib non-free non-free-firmware"
-        state: present
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/debian.sources
+        regexp: '^Components:.*$'
+        replace: 'Components: main contrib non-free non-free-firmware'
       register: repo_added
 
     - name: Update apt cache na repo-wijziging
@@ -84,19 +108,24 @@
         update_cache: true
       when: repo_added.changed
 
-    # --- 2. CPU MICROCODE (Dynamisch) ---
+    # --- 2. CPU MICROCODE (dynamisch) ---
     - name: Installeer de juiste CPU microcode
       ansible.builtin.apt:
         name: "{{ 'intel-microcode' if 'GenuineIntel' in ansible_processor else 'amd64-microcode' }}"
         state: present
 
     # --- 3. CORE FIRMWARE & THERMAL ---
-    - name: Installeer basis firmware en thermisch beheer
+    - name: Installeer basis firmware
       ansible.builtin.apt:
         name:
           - firmware-misc-nonfree
-          - thermald
         state: present
+
+    - name: Installeer thermald (alleen Intel)
+      ansible.builtin.apt:
+        name: thermald
+        state: present
+      when: "'GenuineIntel' in ansible_processor"
 
     # --- 4. NETWERK & BLUETOOTH ---
     - name: Installeer Wi-Fi en Bluetooth drivers
@@ -114,7 +143,7 @@
     - name: Installeer GPU versnelling en Touchpad support
       ansible.builtin.apt:
         name:
-          - firmware-amd-graphics
+          - firmware-amd-graphics   # Onschadelijk op niet-AMD hardware
           - mesa-utils
           - va-driver-all
           - xserver-xorg-input-libinput
@@ -148,6 +177,12 @@
         enabled: true
 
     # --- 8. LAPTOP OPTIMALISATIE ---
+    # TLP conflicteert met power-profiles-daemon
+    - name: Verwijder power-profiles-daemon (conflicteert met TLP)
+      ansible.builtin.apt:
+        name: power-profiles-daemon
+        state: absent
+
     - name: Installeer TLP voor batterijbeheer
       ansible.builtin.apt:
         name:
@@ -162,9 +197,21 @@
         enabled: true
 
     # --- 9. GEBRUIKERSRECHTEN ---
+    - name: Zorg dat hardware-groepen bestaan
+      ansible.builtin.group:
+        name: "{{ item }}"
+        state: present
+        system: true
+      loop:
+        - video
+        - lp
+        - plugdev
+        - bluetooth
+        - audio
+
     - name: Voeg desktopgebruiker toe aan hardware-groepen
       ansible.builtin.user:
-        name: "{{ desktop_user | default('freeboot') }}"
+        name: "{{ desktop_user }}"
         groups: video,lp,plugdev,bluetooth,audio
         append: true
 
@@ -178,6 +225,14 @@
 
   tasks:
     # --- 1. XORG + LIGHTDM ---
+    # Debconf moet VOOR de installatie van lightdm staan
+    - name: Kies LightDM als standaard display manager (debconf)
+      ansible.builtin.debconf:
+        name: lightdm
+        question: shared/default-x-display-manager
+        vtype: select
+        value: /usr/sbin/lightdm
+
     - name: Installeer Xorg en LightDM
       ansible.builtin.apt:
         name:
@@ -186,14 +241,6 @@
           - lightdm
           - slick-greeter
         state: present
-
-    - name: Zet LightDM als standaard display manager
-      ansible.builtin.copy:
-        content: "/usr/sbin/lightdm\n"
-        dest: /etc/X11/default-display-manager
-        owner: root
-        group: root
-        mode: "0644"
 
     - name: Zorg dat lightdm.conf.d directory bestaat
       ansible.builtin.file:
@@ -212,7 +259,6 @@
         owner: root
         group: root
         mode: "0644"
-      notify: Herstart LightDM
 
     # --- 2. CINNAMON ---
     - name: Installeer Cinnamon desktop
@@ -247,12 +293,13 @@
         state: present
 
     - name: Accepteer Microsoft EULA voor ttf-mscorefonts
-      community.general.debconf:
+      ansible.builtin.debconf:
         name: ttf-mscorefonts-installer
         question: msttcorefonts/accepted-mscorefonts-eula
-        vtype: select
+        vtype: boolean
         value: "true"
 
+    # Let op: de MS-fonts worden van SourceForge gedownload en dat faalt soms.
     - name: Installeer Microsoft-kernfonts en vrije alternatieven
       ansible.builtin.apt:
         name:
@@ -271,14 +318,11 @@
           - evince
         state: present
 
-    # --- 6. CLI-TOOLS ---
+    # --- 6. CLI-TOOLS (git, htop, curl staan al in Play 1) ---
     - name: Installeer CLI-tools
       ansible.builtin.apt:
         name:
-          - git
           - vim
-          - htop
-          - curl
           - wget
         state: present
 
@@ -327,11 +371,8 @@
         default: allow
         direction: outgoing
 
-    - name: Sta SSH toe (poort 22) om lock-out te voorkomen
-      community.general.ufw:
-        rule: allow
-        port: "22"
-        proto: tcp
+    # Geen SSH-regel: er is geen SSH-server geïnstalleerd.
+    # Wil je SSH? Installeer openssh-server en voeg een allow-regel voor poort 22 toe.
 
     - name: Schakel de UFW-firewall in
       community.general.ufw:
@@ -341,24 +382,29 @@
     - name: Installeer extra handige tools
       ansible.builtin.apt:
         name:
-          - fwupd                # Firmware-updates via LVFS (BIOS, SSD)
-          - timeshift            # Systeem-backups voor je desktop
-          - gnome-keyring        # Wachtwoordbeheer voor browsers/apps
-          - needrestart          # Waarschuwt na updates welke services herstart moeten
+          - fwupd                  # Firmware-updates via LVFS (BIOS, SSD)
+          - timeshift              # Systeem-backups voor je desktop
+          - gnome-keyring          # Wachtwoordbeheer voor browsers/apps
+          - libpam-gnome-keyring   # Ontgrendelt de keyring automatisch bij inloggen
+          - needrestart            # Waarschuwt welke services herstart moeten
         state: present
 
-    # --- 11. LIGHTDM ACTIVEREN ---
-    - name: Activeer en start LightDM
-      ansible.builtin.systemd:
-        name: lightdm
-        state: started
-        enabled: true
+    - name: Needrestart niet-interactief maken (automatisch herstarten)
+      ansible.builtin.copy:
+        content: |
+          $nrconf{restart} = 'a';
+        dest: /etc/needrestart/conf.d/50-autorestart.conf
+        owner: root
+        group: root
+        mode: "0644"
 
-  handlers:
-    - name: Herstart LightDM
+    # --- 11. LIGHTDM ACTIVEREN ---
+    # Alleen enablen: starten/herstarten zou de lopende sessie afkappen.
+    # LightDM start vanzelf na de volgende reboot.
+    - name: Activeer LightDM bij opstarten
       ansible.builtin.systemd:
         name: lightdm
-        state: restarted
+        enabled: true
 
 # =============================================
 # PLAY 4 — Dagelijks gebruik
