@@ -468,3 +468,44 @@
       ansible.builtin.apt:
         name: file-roller
         state: present
+
+    # --- 7. SIGNAL DESKTOP (eigen repository, alleen amd64) ---
+    - name: Installeer gnupg (nodig om de Signal-sleutel te dearmoren)
+      ansible.builtin.apt:
+        name: gnupg
+        state: present
+      when: ansible_architecture == "x86_64"
+
+    - name: Download Signal signing key
+      ansible.builtin.get_url:
+        url: https://updates.signal.org/desktop/apt/keys.asc
+        dest: /tmp/signal-desktop-keys.asc
+        mode: "0644"
+      when: ansible_architecture == "x86_64"
+
+    - name: Zet Signal signing key om naar keyring
+      ansible.builtin.command:
+        cmd: gpg --dearmor --output /usr/share/keyrings/signal-desktop-keyring.gpg /tmp/signal-desktop-keys.asc
+        creates: /usr/share/keyrings/signal-desktop-keyring.gpg
+      when: ansible_architecture == "x86_64"
+
+    - name: Voeg Signal repository toe
+      ansible.builtin.get_url:
+        url: https://updates.signal.org/static/desktop/apt/signal-desktop.sources
+        dest: /etc/apt/sources.list.d/signal-desktop.sources
+        owner: root
+        group: root
+        mode: "0644"
+      register: signal_repo
+      when: ansible_architecture == "x86_64"
+
+    - name: Update apt cache na toevoegen Signal repository
+      ansible.builtin.apt:
+        update_cache: true
+      when: signal_repo is changed
+
+    - name: Installeer Signal Desktop
+      ansible.builtin.apt:
+        name: signal-desktop
+        state: present
+      when: ansible_architecture == "x86_64"
