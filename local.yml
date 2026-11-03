@@ -1,11 +1,19 @@
 ---
+# Debian 13 (trixie) desktop-provisioning, bedoeld voor ansible-pull.
+#
 # Vereist: community.general collection
-#   sudo apt install ansible        (bevat de collections)
+#   sudo apt install ansible git      (het pakket 'ansible' bevat de collections)
 #   of: ansible-galaxy collection install community.general
 #
-# Gebruik:
-#   ansible-playbook playbook.yml --check --diff
-#   ansible-playbook playbook.yml -e desktop_user=jouwnaam
+# Handmatig testen:
+#   sudo ansible-playbook playbook.yml --check --diff -e desktop_user=jouwnaam
+#
+# Via ansible-pull (eenmalig):
+#   sudo ansible-pull -U <repo-url> -i localhost, -o playbook.yml -e desktop_user=jouwnaam
+#
+# Automatisch dagelijks (systemd-timer, Play 5): geef pull_repo_url mee of vul hem hieronder in
+#   sudo ansible-pull -U <repo-url> -i localhost, playbook.yml \
+#        -e desktop_user=jouwnaam -e pull_repo_url=<repo-url>
 
 # =============================================
 # PLAY 1 — Basislijn
@@ -24,6 +32,7 @@
           - unattended-upgrades
           - git
           - firefox-esr
+          - anacron              # Zorgt dat periodieke taken ook draaien als de PC uit stond
         state: present
         update_cache: true
         cache_valid_time: 3600
@@ -80,7 +89,10 @@
   become: true
 
   vars:
+    # ansible-pull draait als root: geef de echte desktopgebruiker mee met -e desktop_user=naam
     desktop_user: freeboot
+    # Hardware-rapport opnieuw maken als het ouder is dan dit aantal seconden (30 dagen)
+    hw_report_max_age: 2592000
 
   tasks:
     # --- 1. REPOSITORIES (deb822-formaat van Debian 13) ---
@@ -215,33 +227,100 @@
         groups: video,lp,plugdev,bluetooth,audio
         append: true
 
-    # --- 10. HARDWARE-RAPPORT ---
-    - name: Installeer lshw
+    # --- 10. HARDWARE-GEZONDHEIDSRAPPORT (eens per 30 dagen) ---
+    - name: Installeer diagnose-tools
       ansible.builtin.apt:
-        name: lshw
+        name:
+          - lshw
+          - smartmontools
+          - inxi
+          - upower
+          - mokutil
+          - dmidecode
         state: present
 
-    - name: Zoek bestaand hardware-rapport
-      ansible.builtin.find:
-        paths: "/home/{{ desktop_user }}"
-        patterns: "FreeBoot*.txt"
-      register: lshw_existing
+    - name: Kijk of het hardware-rapport al bestaat
+      ansible.builtin.stat:
+        path: "/home/{{ desktop_user }}/FreeBoot-hardware-rapport.txt"
+      register: hw_report
 
-    - name: Maak hardware-rapport met lshw
-      ansible.builtin.command: lshw
-      register: lshw_output
+    - name: Voer hardware-controles uit
+      ansible.builtin.shell:
+        cmd: "( {{ item.cmd }} ) 2>&1"
+        executable: /bin/bash
+      loop: "{{ hw_checks }}"
+      loop_control:
+        label: "{{ item.titel }}"
+      register: hw_results
       changed_when: false
-      when: lshw_existing.matched == 0
+      failed_when: false
+      when: >-
+        not hw_report.stat.exists or
+        (ansible_date_time.epoch | int - hw_report.stat.mtime | int) > hw_report_max_age
+      vars:
+        hw_checks:
+          - titel: ACCU STATUS (HOOFDACCU)
+            cmd: |
+              BAT=$(upower -e | grep battery | head -n 1)
+              if [ -z "$BAT" ]; then echo "Geen accu gevonden."; else upower -i "$BAT"; fi
+
+          - titel: CMOS / INTERNE KLOK
+            cmd: |
+              timedatectl
+              echo
+              echo "--- Tijdsynchronisatie bij opstarten ---"
+              journalctl -b 0 --no-pager | grep -i "systemd-timesyncd" | grep "Interval" -A 2 \
+                || echo "Geen grote tijdsprongen gedetecteerd in deze sessie."
+
+          - titel: SSD GEZONDHEID (SMART)
+            cmd: |
+              DISKS=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v zram)
+              if [ -z "$DISKS" ]; then echo "Geen schijf gevonden voor SMART."; fi
+              for d in $DISKS; do
+                echo "== $d"
+                smartctl -H "$d"
+                echo "Kritieke parameters:"
+                smartctl -A "$d" | grep -iE 'reallocated|wear|pending|exhaustion|percentage|spare' || true
+              done
+
+          - titel: HARDWARE FOUTMELDINGEN (DMESG)
+            cmd: |
+              dmesg | grep -iE 'error|critical|fail|acpi|voltage|low battery|rtc' | tail -n 25
+
+          - titel: BIOS INFORMATIE
+            cmd: |
+              dmidecode -t bios | grep -E "Vendor|Version|Release Date"
+
+          - titel: SECURE BOOT STATUS
+            cmd: |
+              mokutil --sb-state
+
+          - titel: SYSTEEM OVERZICHT (INXI)
+            cmd: |
+              inxi -Fxz
+
+          - titel: HARDWARE DETAILS (LSHW)
+            cmd: |
+              lshw
 
     - name: Schrijf rapport weg in de home-directory
       ansible.builtin.copy:
-        content: "{{ lshw_output.stdout }}\n"
-        dest: "/home/{{ desktop_user }}/FreeBoot{{ 999999 | random(start=100000) }}.txt"
+        content: |
+          --- Uitgebreid Hardware Gezondheidsrapport ---
+          Gegenereerd op: {{ ansible_date_time.iso8601 }}
+          ----------------------------------------------
+          {% for r in hw_results.results %}
+
+          ### {{ r.item.titel }} ###
+          {{ r.stdout }}
+          {% endfor %}
+        dest: "/home/{{ desktop_user }}/FreeBoot-hardware-rapport.txt"
         owner: "{{ desktop_user }}"
         group: "{{ desktop_user }}"
         mode: "0644"
-      when: lshw_existing.matched == 0
-
+      when: >-
+        not hw_report.stat.exists or
+        (ansible_date_time.epoch | int - hw_report.stat.mtime | int) > hw_report_max_age
 
 # =============================================
 # PLAY 3 — Cinnamon desktop & essentials
@@ -250,6 +329,13 @@
   hosts: localhost
   connection: local
   become: true
+
+  vars:
+    # Pas de URL aan zodra je de nieuwe, grotere wallpaper hebt (bij voorkeur 3840x2160)
+    wallpaper_url: https://freeboot.nl/images/wallpaper.webp
+    wallpaper_dest: /usr/share/backgrounds/freeboot/wallpaper.webp
+    # Zet op true om SSH-verkeer (poort 22) toe te staan; installeer dan ook openssh-server
+    ufw_allow_ssh: false
 
   tasks:
     # --- 1. XORG + LIGHTDM ---
@@ -350,7 +436,10 @@
     - name: Installeer CLI-tools
       ansible.builtin.apt:
         name:
+          - git
           - vim
+          - htop
+          - curl
           - wget
         state: present
 
@@ -399,8 +488,13 @@
         default: allow
         direction: outgoing
 
-    # Geen SSH-regel: er is geen SSH-server geïnstalleerd.
-    # Wil je SSH? Installeer openssh-server en voeg een allow-regel voor poort 22 toe.
+    # Standaard uit: er is geen SSH-server geïnstalleerd. Zet ufw_allow_ssh: true om te openen.
+    - name: Sta SSH toe (poort 22)
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+      when: ufw_allow_ssh | bool
 
     - name: Schakel de UFW-firewall in
       community.general.ufw:
@@ -452,11 +546,12 @@
 
     - name: Download wallpaper
       ansible.builtin.get_url:
-        url: https://freeboot.nl/images/wallpaper.webp
-        dest: /usr/share/backgrounds/freeboot/wallpaper.webp
+        url: "{{ wallpaper_url }}"
+        dest: "{{ wallpaper_dest }}"
         owner: root
         group: root
         mode: "0644"
+        force: true   # Haalt een nieuwe versie op als de afbeelding online is gewijzigd
 
     - name: Zorg dat dconf een systeemdatabase gebruikt
       ansible.builtin.copy:
@@ -480,7 +575,7 @@
       ansible.builtin.copy:
         content: |
           [org/cinnamon/desktop/background]
-          picture-uri='file:///usr/share/backgrounds/freeboot/wallpaper.webp'
+          picture-uri='file://{{ wallpaper_dest }}'
           picture-options='zoom'
         dest: /etc/dconf/db/local.d/00-wallpaper
         owner: root
@@ -496,12 +591,11 @@
       ansible.builtin.copy:
         content: |
           [Greeter]
-          background=/usr/share/backgrounds/freeboot/wallpaper.webp
+          background={{ wallpaper_dest }}
         dest: /etc/lightdm/slick-greeter.conf
         owner: root
         group: root
         mode: "0644"
-
 
 # =============================================
 # PLAY 4 — Dagelijks gebruik
@@ -593,6 +687,7 @@
         owner: root
         group: root
         mode: "0644"
+        force: true
       register: signal_repo
       when: ansible_architecture == "x86_64"
 
@@ -606,3 +701,74 @@
         name: signal-desktop
         state: present
       when: ansible_architecture == "x86_64"
+
+# =============================================
+# PLAY 5 — ansible-pull automatisering (systemd-timer)
+# =============================================
+# Wordt alleen uitgevoerd als pull_repo_url is ingevuld.
+- name: Ansible-pull dagelijks automatisch uitvoeren
+  hosts: localhost
+  connection: local
+  become: true
+
+  vars:
+    desktop_user: freeboot
+    pull_repo_url: ""            # bijv. https://github.com/jij/repo.git (of geef mee met -e)
+    pull_branch: main
+    pull_playbook: playbook.yml
+    pull_on_calendar: daily      # systemd OnCalendar-formaat
+
+  tasks:
+    - name: Installeer ansible en git
+      ansible.builtin.apt:
+        name:
+          - ansible
+          - git
+        state: present
+      when: pull_repo_url | length > 0
+
+    - name: Plaats ansible-pull service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Ansible-pull configuratie-update
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          TimeoutStartSec=3h
+          ExecStart=/usr/bin/ansible-pull -U {{ pull_repo_url }} -C {{ pull_branch }} -i localhost, -o {{ pull_playbook }} -e desktop_user={{ desktop_user }}
+        dest: /etc/systemd/system/ansible-pull.service
+        owner: root
+        group: root
+        mode: "0644"
+      when: pull_repo_url | length > 0
+
+    - name: Plaats ansible-pull timer
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Ansible-pull periodiek uitvoeren
+
+          [Timer]
+          OnBootSec=15min
+          OnCalendar={{ pull_on_calendar }}
+          Persistent=true
+          RandomizedDelaySec=30min
+
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/ansible-pull.timer
+        owner: root
+        group: root
+        mode: "0644"
+      when: pull_repo_url | length > 0
+
+    - name: Activeer en start de ansible-pull timer
+      ansible.builtin.systemd:
+        name: ansible-pull.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: pull_repo_url | length > 0
