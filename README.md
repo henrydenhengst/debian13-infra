@@ -2,6 +2,10 @@
 
 Ansible-pull baseline en post-install configuratie voor **Debian 13 (Trixie)** desktops.
 
+[![Debian 13](https://img.shields.io/badge/Debian-13%20(Trixie)-A81D33?style=flat-square&logo=debian&logoColor=white)](https://www.debian.org)
+[![Ansible](https://img.shields.io/badge/Ansible-Automation-EE0000?style=flat-square&logo=ansible&logoColor=white)](https://www.ansible.com)
+
+
 Dit is geen traditionele Ansible-repo met een inventory en push-model. In plaats daarvan gebruikt elke machine **`ansible-pull`**: de machine haalt zelf deze repository op en past de configuratie toe. Zo is elk systeem self-managing en altijd in sync met wat hier staat.
 
 ## 📋 Wat dit doet
