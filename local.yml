@@ -1,30 +1,100 @@
 ---
-# FreeBoot — Debian 13 (trixie) Cinnamon-desktop.
-# Bestandsnaam local.yml: ansible-pull vindt dit bestand zonder extra argument.
+# FreeBoot Debian 13 / Cinnamon: installer-chroot and normal systemd operation.
+# The preseed supplies -e ansible_is_chroot=true; the timer supplies false.
+# Repository files/ are required for MOTD, Firefox and apt policy.
 #
-# Draait twee keer:
-#   1. In de preseed (late_command, in-target = chroot). Daar draait systemd niet:
-#      services worden alleen 'enabled', niet gestart (zie ansible_is_chroot).
-#   2. Daarna dagelijks via de systemd-timer uit Play 6.
-#
-# Taal, toetsenbord, tijdzone en gebruiker 'freeboot' komen uit de preseed.
-#
-# Handmatig testen:
-#   sudo ansible-playbook local.yml --check --diff -e desktop_user=freeboot
-# Handmatig via ansible-pull:
-#   sudo ansible-pull -U https://github.com/henrydenhengst/debian13-infra.git -C main \
-#        -i localhost, -e desktop_user=freeboot local.yml
+# Play order matters: the ansible-pull timer is installed FIRST, so a failure
+# in a later play never leaves a machine without its daily retry.
 
-# =============================================
-# PLAY 1 — Basislijn
-# =============================================
-- name: Local baseline configuratie Debian 13
+- name: FreeBoot periodic ansible-pull updates
   hosts: localhost
   connection: local
   become: true
-
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 300
+  vars:
+    desktop_user: freeboot
+    ansible_is_chroot: false
+    pull_repo_url: https://github.com/henrydenhengst/debian13-infra.git
+    pull_branch: main
+    pull_playbook: local.yml
+    pull_on_calendar: daily
   tasks:
-    - name: Basispakketten installeren
+    - name: Ensure Ansible is available for future updates
+      ansible.builtin.apt:
+        name:
+          - ansible
+          - git
+          - ca-certificates
+          - python3-apt
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create pull systemd service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=FreeBoot configuration refresh
+          Wants=network-online.target
+          After=network-online.target
+          [Service]
+          Type=oneshot
+          TimeoutStartSec=3h
+          Environment=HOME=/root
+          Environment=ANSIBLE_LOCAL_TEMP=/root/.ansible/tmp
+          ExecStart=/usr/bin/ansible-pull -U {{ pull_repo_url }} -C {{ pull_branch }} -i localhost, -e desktop_user={{ desktop_user }} -e ansible_is_chroot=false {{ pull_playbook }}
+        dest: /etc/systemd/system/ansible-pull.service
+        owner: root
+        group: root
+        mode: '0644'
+      register: pull_service
+
+    - name: Create pull systemd timer
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=FreeBoot daily Ansible-pull
+          [Timer]
+          OnBootSec=15min
+          OnCalendar={{ pull_on_calendar }}
+          Persistent=true
+          RandomizedDelaySec=30min
+          [Install]
+          WantedBy=timers.target
+        dest: /etc/systemd/system/ansible-pull.timer
+        owner: root
+        group: root
+        mode: '0644'
+      register: pull_timer
+
+    - name: Reload systemd manager on running system
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: not (ansible_is_chroot | bool) and (pull_service.changed or pull_timer.changed)
+
+    - name: Enable periodic update timer
+      ansible.builtin.systemd_service:
+        name: ansible-pull.timer
+        enabled: true
+        state: "{{ 'started' if not (ansible_is_chroot | bool) else omit }}"
+
+
+- name: FreeBoot Debian 13 baseline
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 300
+  vars:
+    desktop_user: freeboot
+    ansible_is_chroot: false
+  tasks:
+    - name: Install baseline packages
       ansible.builtin.apt:
         name:
           - curl
@@ -32,206 +102,130 @@
           - unattended-upgrades
           - git
           - firefox-esr
-          - anacron              # Zorgt dat periodieke taken ook draaien als de PC uit stond
+          - anacron
+          - sudo
+          - ca-certificates
         state: present
         update_cache: true
         cache_valid_time: 3600
 
-    - name: MOTD plaatsen
+    - name: Install FreeBoot MOTD
       ansible.builtin.copy:
         src: files/motd.txt
         dest: /etc/motd
         owner: root
         group: root
-        mode: "0644"
+        mode: '0644'
 
-    - name: Firefox policies-directory aanmaken
+    - name: Create Firefox policies directory
       ansible.builtin.file:
         path: /etc/firefox/policies
         state: directory
-        owner: root
-        group: root
-        mode: "0755"
+        mode: '0755'
 
-    - name: Firefox policies plaatsen (uBlock Origin + startpagina)
+    - name: Install Firefox policies
       ansible.builtin.copy:
         src: files/firefox/policies.json
         dest: /etc/firefox/policies/policies.json
-        owner: root
-        group: root
-        mode: "0644"
+        mode: '0644'
 
-    - name: Configureer unattended-upgrades
+    - name: Configure automatic upgrades
       ansible.builtin.copy:
         src: files/apt/52unattended-upgrades-local
         dest: /etc/apt/apt.conf.d/52unattended-upgrades-local
-        owner: root
-        group: root
-        mode: "0644"
-      notify: Herstart apt-daily timers
+        mode: '0644'
+      register: upgrade_policy
 
-  handlers:
-    - name: Herstart apt-daily timers
-      ansible.builtin.systemd:
-        name: "{{ item }}"
+    - name: Restart upgrade timers if policy changed
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
         state: restarted
       loop:
         - apt-daily.timer
         - apt-daily-upgrade.timer
-      when: not ansible_is_chroot
+      when: upgrade_policy.changed and not (ansible_is_chroot | bool)
 
-# =============================================
-# PLAY 2 — Hardware support
-# =============================================
-- name: Hardware Support & Optimalisatie (Debian 13)
+
+- name: FreeBoot hardware support and diagnostics
   hosts: localhost
   connection: local
-  gather_facts: true
   become: true
-
+  gather_facts: true
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 300
   vars:
-    # Wordt in de preseed aangemaakt; ansible-pull draait als root, dus geef hem mee met -e
     desktop_user: freeboot
-    # Hardware-rapport opnieuw maken als het ouder is dan dit aantal seconden (30 dagen)
+    ansible_is_chroot: false
     hw_report_max_age: 2592000
-
+    hw_report_path: '/home/{{ desktop_user }}/FreeBoot-hardware-rapport.txt'
   tasks:
-    # --- 1. REPOSITORIES (deb822-formaat van Debian 13) ---
-    - name: Controleer of debian.sources bestaat
+    - name: Ensure Debian deb822 sources file exists
       ansible.builtin.stat:
         path: /etc/apt/sources.list.d/debian.sources
-      register: debian_sources
+      register: sources_file
 
-    - name: Stop als de deb822-bronnen ontbreken
-      ansible.builtin.fail:
-        msg: >-
-          /etc/apt/sources.list.d/debian.sources niet gevonden.
-          Pas de repo-taak aan voor jouw situatie (bijv. klassieke sources.list).
-      when: not debian_sources.stat.exists
+    - name: Check classic sources.list
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list
+      register: classic_sources_file
 
-    - name: Activeer contrib, non-free en non-free-firmware
+    - name: Enable non-free firmware components in deb822 sources
       ansible.builtin.replace:
         path: /etc/apt/sources.list.d/debian.sources
-        regexp: '^Components:.*$'
+        regexp: '(?m)^Components:.*$'
         replace: 'Components: main contrib non-free non-free-firmware'
-      register: repo_added
+      when: sources_file.stat.exists
+      register: repo_changed
 
-    - name: Update apt cache na repo-wijziging
+    - name: Enable additional components for classic sources.list
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list
+        regexp: '(?m)^(deb(?:\s+\[[^]]+\])?\s+\S+\s+\S+)\s+main(?:\s+.*)?$'
+        replace: '\1 main contrib non-free non-free-firmware'
+      when: not sources_file.stat.exists and classic_sources_file.stat.exists
+      register: classic_repo_changed
+
+    - name: Refresh package lists after repository updates
       ansible.builtin.apt:
         update_cache: true
-      when: repo_added.changed
+      when: (repo_changed is changed) or (classic_repo_changed is changed)
 
-    # --- 2. CPU MICROCODE (dynamisch) ---
-    - name: Installeer de juiste CPU microcode
+    - name: Install Intel microcode only on Intel CPUs
       ansible.builtin.apt:
-        name: "{{ 'intel-microcode' if 'GenuineIntel' in ansible_processor else 'amd64-microcode' }}"
+        name: intel-microcode
         state: present
+      when: ansible_facts['processor'] | join(' ') is search('GenuineIntel')
 
-    # --- 3. CORE FIRMWARE & THERMAL ---
-    - name: Installeer basis firmware
+    - name: Install AMD microcode only on AMD CPUs
+      ansible.builtin.apt:
+        name: amd64-microcode
+        state: present
+      when: ansible_facts['processor'] | join(' ') is search('AuthenticAMD')
+
+    - name: Install firmware, device tools and diagnostics
       ansible.builtin.apt:
         name:
           - firmware-misc-nonfree
-        state: present
-
-    - name: Installeer thermald (alleen Intel)
-      ansible.builtin.apt:
-        name: thermald
-        state: present
-      when: "'GenuineIntel' in ansible_processor"
-
-    # --- 4. NETWERK & BLUETOOTH ---
-    - name: Installeer Wi-Fi en Bluetooth drivers
-      ansible.builtin.apt:
-        name:
           - firmware-iwlwifi
           - firmware-brcm80211
           - firmware-realtek
           - firmware-atheros
+          - firmware-amd-graphics
+          - firmware-sof-signed
           - bluez-firmware
           - bluetooth
-        state: present
-
-    # --- 5. GRAFISCH & INPUT ---
-    - name: Installeer GPU versnelling en Touchpad support
-      ansible.builtin.apt:
-        name:
-          - firmware-amd-graphics   # Onschadelijk op niet-AMD hardware
           - mesa-utils
           - va-driver-all
           - xserver-xorg-input-libinput
-        state: present
-
-    # --- 6. AUDIO & WEBCAM ---
-    - name: Installeer Audio (SOF) en Webcam tools
-      ansible.builtin.apt:
-        name:
-          - firmware-sof-signed
           - alsa-utils
           - guvcview
           - v4l-utils
-        state: present
-
-    # --- 7. BESTANDSSYSTEEM & SMARTCARD ---
-    - name: Installeer NTFS, exFAT en Smartcard support
-      ansible.builtin.apt:
-        name:
           - ntfs-3g
           - exfatprogs
           - pcscd
           - pcsc-tools
           - opensc
-        state: present
-
-    - name: Zorg dat Smartcard service draait
-      ansible.builtin.systemd:
-        name: pcscd
-        state: "{{ omit if ansible_is_chroot else 'started' }}"
-        enabled: true
-
-    # --- 8. LAPTOP OPTIMALISATIE ---
-    # TLP conflicteert met power-profiles-daemon
-    - name: Verwijder power-profiles-daemon (conflicteert met TLP)
-      ansible.builtin.apt:
-        name: power-profiles-daemon
-        state: absent
-
-    - name: Installeer TLP voor batterijbeheer
-      ansible.builtin.apt:
-        name:
-          - tlp
-          - tlp-rdw
-        state: present
-
-    - name: Start TLP service
-      ansible.builtin.systemd:
-        name: tlp
-        state: "{{ omit if ansible_is_chroot else 'started' }}"
-        enabled: true
-
-    # --- 9. GEBRUIKERSRECHTEN ---
-    - name: Zorg dat hardware-groepen bestaan
-      ansible.builtin.group:
-        name: "{{ item }}"
-        state: present
-        system: true
-      loop:
-        - video
-        - lp
-        - plugdev
-        - bluetooth
-        - audio
-
-    - name: Voeg desktopgebruiker toe aan hardware-groepen
-      ansible.builtin.user:
-        name: "{{ desktop_user }}"
-        groups: video,lp,plugdev,bluetooth,audio
-        append: true
-
-    # --- 10. HARDWARE-GEZONDHEIDSRAPPORT (eens per 30 dagen) ---
-    - name: Installeer diagnose-tools
-      ansible.builtin.apt:
-        name:
           - lshw
           - smartmontools
           - inxi
@@ -240,217 +234,239 @@
           - dmidecode
         state: present
 
-    - name: Kijk of het hardware-rapport al bestaat
+    - name: Install Intel thermal management
+      ansible.builtin.apt:
+        name: thermald
+        state: present
+      when: ansible_facts['processor'] | join(' ') is search('GenuineIntel')
+
+    - name: Enable smartcard daemon
+      ansible.builtin.systemd_service:
+        name: pcscd.socket
+        enabled: true
+        state: "{{ 'started' if not (ansible_is_chroot | bool) else omit }}"
+
+    - name: Detect laptop batteries
+      ansible.builtin.find:
+        paths: /sys/class/power_supply
+        file_type: link
+        patterns: 'BAT*'
+      register: batteries
+
+    - name: Install TLP on laptops
+      ansible.builtin.apt:
+        name:
+          - tlp
+          - tlp-rdw
+        state: present
+      when: batteries.matched | int > 0
+
+    - name: Remove conflicting laptop power daemon
+      ansible.builtin.apt:
+        name: power-profiles-daemon
+        state: absent
+      when: batteries.matched | int > 0
+
+    - name: Enable TLP on laptops
+      ansible.builtin.systemd_service:
+        name: tlp
+        enabled: true
+        state: "{{ 'started' if not (ansible_is_chroot | bool) else omit }}"
+      when: batteries.matched | int > 0
+
+    - name: Ensure hardware access groups exist
+      ansible.builtin.group:
+        name: '{{ item }}'
+        state: present
+      loop:
+        - video
+        - lp
+        - plugdev
+        - bluetooth
+        - audio
+
+    - name: Add desktop user to hardware groups
+      ansible.builtin.user:
+        name: '{{ desktop_user }}'
+        groups: video,lp,plugdev,bluetooth,audio
+        append: true
+
+    - name: Determine whether diagnostics need refreshing
       ansible.builtin.stat:
-        path: "/home/{{ desktop_user }}/FreeBoot-hardware-rapport.txt"
-      register: hw_report
+        path: '{{ hw_report_path }}'
+      register: hardware_report
 
-    - name: Voer hardware-controles uit
-      ansible.builtin.shell:
-        cmd: "( {{ item.cmd }} ) 2>&1"
+    # The installer chroot has no running systemd/upower/dmesg access, so the
+    # report is only meaningful on the real system (first timer run).
+    - name: Decide whether to write the hardware report
+      ansible.builtin.set_fact:
+        hw_report_due: >-
+          {{ not (ansible_is_chroot | bool) and
+             (not hardware_report.stat.exists or
+              ((ansible_date_time.epoch | int) - (hardware_report.stat.mtime | default(0) | int)) > (hw_report_max_age | int)) }}
+
+    - name: Collect hardware diagnostics
+      ansible.builtin.shell: |
+        {
+          echo '=== FreeBoot hardware report ==='
+          date -Is
+          for entry in 'Battery:upower -e' 'Clock:timedatectl' 'Time sync:journalctl -b 0 -u systemd-timesyncd --no-pager' 'Storage:lsblk -o NAME,SIZE,TYPE,MODEL' 'SMART:smartctl --scan' 'Kernel:dmesg --level=err,warn' 'BIOS:dmidecode -t bios' 'Secure Boot:mokutil --sb-state' 'System:inxi -Fxz' 'Hardware:lshw'; do
+            name=${entry%%:*}; cmd=${entry#*:}
+            printf '\n=== %s ===\n' "$name"
+            $cmd 2>&1 || true
+          done
+          for battery in $(upower -e 2>/dev/null | grep battery || true); do
+            echo "=== Battery details $battery ==="
+            upower -i "$battery" 2>&1 || true
+          done
+          for disk in $(lsblk -dpno NAME,TYPE | awk '$2=="disk" {print $1}'); do
+            echo "=== SMART $disk ==="
+            smartctl -H -A "$disk" 2>&1 || true
+          done
+        } > {{ hw_report_path }}
+      args:
         executable: /bin/bash
-      loop: "{{ hw_checks }}"
-      loop_control:
-        label: "{{ item.titel }}"
-      register: hw_results
-      changed_when: false
-      failed_when: false
-      when: >-
-        not hw_report.stat.exists or
-        (ansible_date_time.epoch | int - hw_report.stat.mtime | int) > hw_report_max_age
-      vars:
-        hw_checks:
-          - titel: ACCU STATUS (HOOFDACCU)
-            cmd: |
-              BAT=$(upower -e | grep battery | head -n 1)
-              if [ -z "$BAT" ]; then echo "Geen accu gevonden."; else upower -i "$BAT"; fi
+      changed_when: true
+      when: hw_report_due | bool
 
-          - titel: CMOS / INTERNE KLOK
-            cmd: |
-              timedatectl
-              echo
-              echo "--- Tijdsynchronisatie bij opstarten ---"
-              journalctl -b 0 --no-pager | grep -i "systemd-timesyncd" | grep "Interval" -A 2 \
-                || echo "Geen grote tijdsprongen gedetecteerd in deze sessie."
+    - name: Set report ownership
+      ansible.builtin.file:
+        path: '{{ hw_report_path }}'
+        owner: '{{ desktop_user }}'
+        group: '{{ desktop_user }}'
+        mode: '0600'
+      when: hw_report_due | bool
 
-          - titel: SSD GEZONDHEID (SMART)
-            cmd: |
-              DISKS=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v zram)
-              if [ -z "$DISKS" ]; then echo "Geen schijf gevonden voor SMART."; fi
-              for d in $DISKS; do
-                echo "== $d"
-                smartctl -H "$d"
-                echo "Kritieke parameters:"
-                smartctl -A "$d" | grep -iE 'reallocated|wear|pending|exhaustion|percentage|spare' || true
-              done
 
-          - titel: HARDWARE FOUTMELDINGEN (DMESG)
-            cmd: |
-              dmesg | grep -iE 'error|critical|fail|acpi|voltage|low battery|rtc' | tail -n 25
-
-          - titel: BIOS INFORMATIE
-            cmd: |
-              dmidecode -t bios | grep -E "Vendor|Version|Release Date"
-
-          - titel: SECURE BOOT STATUS
-            cmd: |
-              mokutil --sb-state
-
-          - titel: SYSTEEM OVERZICHT (INXI)
-            cmd: |
-              inxi -Fxz
-
-          - titel: HARDWARE DETAILS (LSHW)
-            cmd: |
-              lshw
-
-    - name: Schrijf rapport weg in de home-directory
-      ansible.builtin.copy:
-        content: |
-          --- Uitgebreid Hardware Gezondheidsrapport ---
-          Gegenereerd op: {{ ansible_date_time.iso8601 }}
-          ----------------------------------------------
-          {% for r in hw_results.results %}
-
-          ### {{ r.item.titel }} ###
-          {{ r.stdout }}
-          {% endfor %}
-        dest: "/home/{{ desktop_user }}/FreeBoot-hardware-rapport.txt"
-        owner: "{{ desktop_user }}"
-        group: "{{ desktop_user }}"
-        mode: "0644"
-      when: >-
-        not hw_report.stat.exists or
-        (ansible_date_time.epoch | int - hw_report.stat.mtime | int) > hw_report_max_age
-
-# =============================================
-# PLAY 3 — Cinnamon desktop & essentials
-# =============================================
-- name: Cinnamon desktopomgeving en essentiële applicaties
+- name: FreeBoot Cinnamon desktop and protection
   hosts: localhost
   connection: local
   become: true
-
+  gather_facts: true
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 300
   vars:
-    # Pas de URL aan zodra je de nieuwe, grotere wallpaper hebt (bij voorkeur 3840x2160)
+    ansible_is_chroot: false
     wallpaper_url: https://freeboot.nl/images/wallpaper.webp
     wallpaper_dest: /usr/share/backgrounds/freeboot/wallpaper.webp
-    # De preseed installeert openssh-server, dus SSH (poort 22) moet door de firewall
-    ufw_allow_ssh: true
-
+    # Safer default: SSH stays closed. Set -e ufw_allow_ssh=true to open port 22.
+    ufw_allow_ssh: false
   tasks:
-    # --- 1. XORG + LIGHTDM ---
-    # Debconf moet VOOR de installatie van lightdm staan
-    - name: Kies LightDM als standaard display manager (debconf)
+    - name: Select LightDM before installation
       ansible.builtin.debconf:
         name: lightdm
         question: shared/default-x-display-manager
         vtype: select
         value: /usr/sbin/lightdm
 
-    - name: Installeer Xorg en LightDM
+    - name: Install Cinnamon, display manager, audio and multimedia
       ansible.builtin.apt:
         name:
           - xserver-xorg
           - xinit
           - lightdm
           - slick-greeter
-        state: present
-
-    - name: Zorg dat lightdm.conf.d directory bestaat
-      ansible.builtin.file:
-        path: /etc/lightdm/lightdm.conf.d
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Configureer slick-greeter als LightDM greeter
-      ansible.builtin.copy:
-        content: |
-          [Seat:*]
-          greeter-session=slick-greeter
-        dest: /etc/lightdm/lightdm.conf.d/50-slick-greeter.conf
-        owner: root
-        group: root
-        mode: "0644"
-
-    # --- 2. CINNAMON ---
-    - name: Installeer Cinnamon desktop
-      ansible.builtin.apt:
-        name:
           - cinnamon
           - cinnamon-l10n
+          - network-manager
           - network-manager-gnome
           - gnome-terminal
           - nemo
-          - gvfs-fuse                  # Prullenbak en externe schijven in Nemo
-          - gstreamer1.0-plugins-good  # Audio/video previews
-        state: present
-
-    # --- 3. AUDIO (PipeWire) ---
-    - name: Installeer PipeWire audio-stack
-      ansible.builtin.apt:
-        name:
+          - gvfs-fuse
+          - gstreamer1.0-plugins-good
           - pipewire
           - pipewire-audio
           - wireplumber
           - pavucontrol
         state: present
 
-    # --- 4. FONTS ---
-    - name: Installeer basisfonts
+    # The installer may leave the NIC in /etc/network/interfaces (ifupdown),
+    # which makes NetworkManager list it as "unmanaged". Keep loopback only.
+    - name: Check for ifupdown interfaces file
+      ansible.builtin.stat:
+        path: /etc/network/interfaces
+      register: ifupdown_file
+
+    - name: Hand network interfaces over to NetworkManager
+      ansible.builtin.copy:
+        content: |
+          # Managed by FreeBoot Ansible: NetworkManager handles all other interfaces.
+          source /etc/network/interfaces.d/*
+
+          auto lo
+          iface lo inet loopback
+        dest: /etc/network/interfaces
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      when: ifupdown_file.stat.exists
+
+    - name: Create LightDM configuration directory
+      ansible.builtin.file:
+        path: /etc/lightdm/lightdm.conf.d
+        state: directory
+        mode: '0755'
+
+    - name: Select slick-greeter
+      ansible.builtin.copy:
+        content: |
+          [Seat:*]
+          greeter-session=slick-greeter
+        dest: /etc/lightdm/lightdm.conf.d/50-slick-greeter.conf
+        mode: '0644'
+
+    - name: Install fonts and office suite
       ansible.builtin.apt:
         name:
           - fonts-dejavu
           - fonts-noto
           - fonts-liberation
-        state: present
-
-    - name: Accepteer Microsoft EULA voor ttf-mscorefonts
-      ansible.builtin.debconf:
-        name: ttf-mscorefonts-installer
-        question: msttcorefonts/accepted-mscorefonts-eula
-        vtype: boolean
-        value: "true"
-
-    # De MS-fonts worden van SourceForge gedownload en dat faalt soms.
-    # ignore_errors: een mislukte download mag de hele installatie niet laten stoppen.
-    # Herstel eventueel handmatig met: sudo dpkg --configure -a
-    - name: Installeer Microsoft-kernfonts en vrije alternatieven
-      ansible.builtin.apt:
-        name:
-          - ttf-mscorefonts-installer
           - fonts-crosextra-carlito
           - fonts-crosextra-caladea
-        state: present
-      ignore_errors: true
-
-    # --- 5. ESSENTIËLE APPLICATIES ---
-    - name: Installeer kantoor- en document-applicaties
-      ansible.builtin.apt:
-        name:
           - libreoffice
           - libreoffice-gtk3
           - libreoffice-l10n-nl
           - evince
         state: present
 
-    # --- 6. CLI-TOOLS (git, htop, curl staan al in Play 1) ---
-    - name: Installeer CLI-tools
-      ansible.builtin.apt:
-        name:
-          - git
-          - vim
-          - htop
-          - curl
-          - wget
-        state: present
+    - name: Accept Microsoft fonts license
+      ansible.builtin.debconf:
+        name: ttf-mscorefonts-installer
+        question: msttcorefonts/accepted-mscorefonts-eula
+        vtype: boolean
+        value: 'true'
 
-    # --- 7. ARCHIEFTOOLS (zonder RAR) ---
-    - name: Installeer archiveringstools
+    # Optional and download-dependent: skipped in the installer chroot and
+    # cleaned up if the postinst fails, so dpkg never stays half-configured.
+    - name: Attempt optional Microsoft core fonts
+      ansible.builtin.apt:
+        name: ttf-mscorefonts-installer
+        state: present
+      register: msfonts_install
+      ignore_errors: true
+      when: not (ansible_is_chroot | bool)
+
+    - name: Repair dpkg state if Microsoft fonts failed
+      ansible.builtin.command: dpkg --configure -a
+      changed_when: false
+      failed_when: false
+      when: msfonts_install is failed
+
+    - name: Purge broken Microsoft fonts package (retried on next run)
+      ansible.builtin.apt:
+        name: ttf-mscorefonts-installer
+        state: absent
+        purge: true
+      failed_when: false
+      when: msfonts_install is failed
+
+    - name: Install command line, archive and security tools
       ansible.builtin.apt:
         name:
+          - vim
+          - wget
           - zip
           - unzip
           - 7zip
@@ -459,285 +475,173 @@
           - cabextract
           - arj
           - lhasa
-        state: present
-
-    # --- 8. SECURITY: APPARMOR ---
-    - name: Installeer AppArmor (userspace tools + extra profielen)
-      ansible.builtin.apt:
-        name:
           - apparmor
           - apparmor-profiles
           - apparmor-utils
+          - ufw
+          - fwupd
+          - timeshift
+          - gnome-keyring
+          - libpam-gnome-keyring
         state: present
 
-    - name: Zorg dat AppArmor actief is
-      ansible.builtin.systemd:
+    - name: Enable AppArmor
+      ansible.builtin.systemd_service:
         name: apparmor
-        state: "{{ omit if ansible_is_chroot else 'started' }}"
         enabled: true
+        state: "{{ 'started' if not (ansible_is_chroot | bool) else omit }}"
 
-    # --- 9. SECURITY: UFW FIREWALL ---
-    - name: Installeer UFW
-      ansible.builtin.apt:
-        name: ufw
-        state: present
-
-    - name: Stel standaard inkomend beleid in op 'deny'
+    - name: Default-deny inbound traffic
       community.general.ufw:
         default: deny
         direction: incoming
+      when: not (ansible_is_chroot | bool)
 
-    - name: Stel standaard uitgaand beleid in op 'allow'
+    - name: Default-allow outbound traffic
       community.general.ufw:
         default: allow
         direction: outgoing
+      when: not (ansible_is_chroot | bool)
 
-    - name: Sta SSH toe (poort 22) om lock-out te voorkomen
+    - name: Permit SSH before enabling firewall
       community.general.ufw:
         rule: allow
-        port: "22"
+        port: '22'
         proto: tcp
-      when: ufw_allow_ssh | bool
+      when: ufw_allow_ssh | bool and not (ansible_is_chroot | bool)
 
-    # Op een draaiend systeem schakelen we UFW direct in. In de installer-chroot
-    # kan dat niet (geen kernel-firewall); daar zetten we hem aan voor de eerste boot.
-    - name: Schakel de UFW-firewall in
+    - name: Enable firewall on running system
       community.general.ufw:
         state: enabled
-      when: not ansible_is_chroot
+      when: not (ansible_is_chroot | bool)
 
-    - name: Zet UFW aan bij opstarten (tijdens installatie)
+    - name: Preconfigure incoming firewall policy for boot
+      ansible.builtin.lineinfile:
+        path: /etc/default/ufw
+        regexp: '^DEFAULT_INPUT_POLICY='
+        line: 'DEFAULT_INPUT_POLICY="DROP"'
+      when: ansible_is_chroot | bool
+
+    - name: Preconfigure SSH firewall rule for boot
+      ansible.builtin.command: ufw allow 22/tcp
+      changed_when: false
+      when: ufw_allow_ssh | bool and ansible_is_chroot | bool
+
+    - name: Enable firewall at first boot
       ansible.builtin.lineinfile:
         path: /etc/ufw/ufw.conf
         regexp: '^ENABLED='
         line: 'ENABLED=yes'
-      when: ansible_is_chroot
+      when: ansible_is_chroot | bool
 
-    # --- 10. NICE-TO-HAVES ---
-    - name: Installeer extra handige tools
-      ansible.builtin.apt:
-        name:
-          - fwupd                  # Firmware-updates via LVFS (BIOS, SSD)
-          - timeshift              # Systeem-backups voor je desktop
-          - gnome-keyring          # Wachtwoordbeheer voor browsers/apps
-          - libpam-gnome-keyring   # Ontgrendelt de keyring automatisch bij inloggen
-        state: present
-
-    # needrestart alleen op een draaiend systeem: in de installer-chroot is er geen systemd
-    - name: Installeer needrestart (waarschuwt welke services herstart moeten)
+    - name: Install needrestart after first boot
       ansible.builtin.apt:
         name: needrestart
         state: present
-      when: not ansible_is_chroot
+      when: not (ansible_is_chroot | bool)
 
-    - name: Needrestart niet-interactief maken (automatisch herstarten)
+    - name: Configure noninteractive needrestart
       ansible.builtin.copy:
-        content: |
-          $nrconf{restart} = 'a';
+        content: "$nrconf{restart} = 'a';\n"
         dest: /etc/needrestart/conf.d/50-autorestart.conf
-        owner: root
-        group: root
-        mode: "0644"
-      when: not ansible_is_chroot
+        mode: '0644'
+      when: not (ansible_is_chroot | bool)
 
-    # --- 11. LIGHTDM ACTIVEREN ---
-    # Alleen enablen: starten/herstarten zou de lopende sessie afkappen.
-    # LightDM start vanzelf na de volgende reboot.
-    - name: Activeer LightDM bij opstarten
-      ansible.builtin.systemd:
+    - name: Enable LightDM
+      ansible.builtin.systemd_service:
         name: lightdm
         enabled: true
 
-    # --- 12. WALLPAPER ---
-    - name: Installeer dconf-tools en webp-ondersteuning
+    - name: Install dconf and WebP image support
       ansible.builtin.apt:
         name:
           - dconf-cli
-          - webp-pixbuf-loader   # Nodig om .webp als achtergrond te tonen
+          - webp-pixbuf-loader
         state: present
 
-    - name: Maak wallpaper-directory aan
+    - name: Create wallpaper directory
       ansible.builtin.file:
         path: /usr/share/backgrounds/freeboot
         state: directory
-        owner: root
-        group: root
-        mode: "0755"
+        mode: '0755'
 
-    # ignore_errors: als freeboot.nl niet bereikbaar is, mag de installatie niet stoppen.
-    # De dagelijkse run haalt de afbeelding daarna alsnog op.
-    - name: Download wallpaper
+    - name: Download FreeBoot wallpaper if reachable
       ansible.builtin.get_url:
-        url: "{{ wallpaper_url }}"
-        dest: "{{ wallpaper_dest }}"
-        owner: root
-        group: root
-        mode: "0644"
-        force: true   # Haalt een nieuwe versie op als de afbeelding online is gewijzigd
-      ignore_errors: true
+        url: '{{ wallpaper_url }}'
+        dest: '{{ wallpaper_dest }}'
+        mode: '0644'
+        timeout: 20
+        force: true
+      register: wallpaper_download
+      failed_when: false
 
-    - name: Zorg dat dconf een systeemdatabase gebruikt
+    - name: Create dconf profile directory
+      ansible.builtin.file:
+        path: /etc/dconf/profile
+        state: directory
+        mode: '0755'
+
+    - name: Create system dconf profile
       ansible.builtin.copy:
         content: |
           user-db:user
           system-db:local
         dest: /etc/dconf/profile/user
-        owner: root
-        group: root
-        mode: "0644"
+        mode: '0644'
 
-    - name: Zorg dat dconf local.d directory bestaat
+    - name: Create dconf database directory
       ansible.builtin.file:
         path: /etc/dconf/db/local.d
         state: directory
-        owner: root
-        group: root
-        mode: "0755"
+        mode: '0755'
 
-    - name: Stel wallpaper in als Cinnamon-standaard
+    - name: Configure Cinnamon wallpaper default
       ansible.builtin.copy:
         content: |
           [org/cinnamon/desktop/background]
           picture-uri='file://{{ wallpaper_dest }}'
           picture-options='zoom'
         dest: /etc/dconf/db/local.d/00-wallpaper
-        owner: root
-        group: root
-        mode: "0644"
-      register: dconf_wallpaper
+        mode: '0644'
+      register: wallpaper_settings
 
-    - name: Werk de dconf-database bij
+    - name: Refresh dconf database
       ansible.builtin.command: dconf update
-      when: dconf_wallpaper is changed
+      when: wallpaper_settings.changed
 
-    - name: Zet dezelfde wallpaper op het inlogscherm (slick-greeter)
+    - name: Configure greeter wallpaper
       ansible.builtin.copy:
         content: |
           [Greeter]
           background={{ wallpaper_dest }}
         dest: /etc/lightdm/slick-greeter.conf
-        owner: root
-        group: root
-        mode: "0644"
+        mode: '0644'
 
-# =============================================
-# PLAY 4 — Dagelijks gebruik
-# =============================================
-- name: Dagelijkse gebruikerslaag
+
+- name: FreeBoot daily applications
   hosts: localhost
   connection: local
   become: true
-
+  gather_facts: true
+  module_defaults:
+    ansible.builtin.apt:
+      lock_timeout: 300
+  vars:
+    ansible_is_chroot: false
   tasks:
-    # --- 1. PRINTEN (driverless) ---
-    - name: Installeer CUPS en moderne driverless printing
+    - name: Install printing, media and user applications
       ansible.builtin.apt:
         name:
           - cups
-          - avahi-daemon      # mDNS discovery voor netwerkprinters
-          - ipp-usb           # Driverless printing voor USB-printers
+          - avahi-daemon
+          - ipp-usb
           - system-config-printer
-        state: present
-
-    - name: Zorg dat CUPS draait
-      ansible.builtin.systemd:
-        name: cups
-        state: "{{ omit if ansible_is_chroot else 'started' }}"
-        enabled: true
-
-    - name: Zorg dat Avahi draait (netwerkprinterdetectie)
-      ansible.builtin.systemd:
-        name: avahi-daemon
-        state: "{{ omit if ansible_is_chroot else 'started' }}"
-        enabled: true
-
-    # --- 2. BLUETOOTH GUI ---
-    - name: Installeer Blueman
-      ansible.builtin.apt:
-        name: blueman
-        state: present
-
-    # --- 3. MEDIA ---
-    - name: Installeer VLC
-      ansible.builtin.apt:
-        name:
+          - blueman
           - vlc
           - vlc-l10n
-        state: present
-
-    # --- 4. WACHTWOORDKLUIS ---
-    - name: Installeer KeePassXC
-      ansible.builtin.apt:
-        name: keepassxc
-        state: present
-
-    # --- 5. SCREENSHOTS ---
-    - name: Installeer Flameshot
-      ansible.builtin.apt:
-        name: flameshot
-        state: present
-
-    # --- 6. ARCHIEF-GUI ---
-    - name: Installeer File Roller
-      ansible.builtin.apt:
-        name: file-roller
-        state: present
-
-    # --- 7. SIGNAL DESKTOP (eigen repository, alleen amd64) ---
-    - name: Installeer gnupg (nodig om de Signal-sleutel te dearmoren)
-      ansible.builtin.apt:
-        name: gnupg
-        state: present
-      when: ansible_architecture == "x86_64"
-
-    - name: Download Signal signing key
-      ansible.builtin.get_url:
-        url: https://updates.signal.org/desktop/apt/keys.asc
-        dest: /tmp/signal-desktop-keys.asc
-        mode: "0644"
-      when: ansible_architecture == "x86_64"
-
-    - name: Zet Signal signing key om naar keyring
-      ansible.builtin.command:
-        cmd: gpg --dearmor --output /usr/share/keyrings/signal-desktop-keyring.gpg /tmp/signal-desktop-keys.asc
-        creates: /usr/share/keyrings/signal-desktop-keyring.gpg
-      when: ansible_architecture == "x86_64"
-
-    - name: Voeg Signal repository toe
-      ansible.builtin.get_url:
-        url: https://updates.signal.org/static/desktop/apt/signal-desktop.sources
-        dest: /etc/apt/sources.list.d/signal-desktop.sources
-        owner: root
-        group: root
-        mode: "0644"
-        force: true
-      register: signal_repo
-      when: ansible_architecture == "x86_64"
-
-    - name: Update apt cache na toevoegen Signal repository
-      ansible.builtin.apt:
-        update_cache: true
-      when: signal_repo is changed
-
-    - name: Installeer Signal Desktop
-      ansible.builtin.apt:
-        name: signal-desktop
-        state: present
-      when: ansible_architecture == "x86_64"
-
-# =============================================
-# PLAY 5 — Taalpakketten, extra software en afwerking
-# =============================================
-# Taal, tijdzone, toetsenbord en gebruiker staan al in de preseed.
-- name: Taalpakketten, extra software en afwerking
-  hosts: localhost
-  connection: local
-  become: true
-
-  tasks:
-    - name: Installeer taalpakketten, mail, scannen en Flatpak
-      ansible.builtin.apt:
-        name:
+          - keepassxc
+          - flameshot
+          - file-roller
           - firefox-esr-l10n-nl
           - hunspell-nl
           - hyphen-nl
@@ -749,89 +653,66 @@
           - flatpak
         state: present
 
-    # Flathub wordt op een draaiend systeem toegevoegd (eerste dagelijkse run na de installatie)
-    - name: Voeg Flathub toe
+    - name: Enable printer and discovery services
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+        enabled: true
+        state: "{{ 'started' if not (ansible_is_chroot | bool) else omit }}"
+      loop:
+        - cups
+        - avahi-daemon
+
+    # Optional third-party repository: a Signal outage must not abort the run.
+    - name: Signal Desktop (amd64 only, best effort)
+      when: ansible_architecture == 'x86_64'
+      block:
+        - name: Install signing utilities
+          ansible.builtin.apt:
+            name: gnupg
+            state: present
+
+        - name: Download Signal key
+          ansible.builtin.get_url:
+            url: https://updates.signal.org/desktop/apt/keys.asc
+            dest: /tmp/signal-desktop-keys.asc
+            mode: '0644'
+            timeout: 30
+
+        - name: Convert Signal key to keyring
+          ansible.builtin.command:
+            cmd: gpg --batch --yes --dearmor --output /usr/share/keyrings/signal-desktop-keyring.gpg /tmp/signal-desktop-keys.asc
+            creates: /usr/share/keyrings/signal-desktop-keyring.gpg
+
+        - name: Install Signal repository definition
+          ansible.builtin.get_url:
+            url: https://updates.signal.org/static/desktop/apt/signal-desktop.sources
+            dest: /etc/apt/sources.list.d/signal-desktop.sources
+            mode: '0644'
+            timeout: 30
+          register: signal_repository
+
+        - name: Refresh apt after Signal repository change
+          ansible.builtin.apt:
+            update_cache: true
+          when: signal_repository is changed
+
+        - name: Install Signal Desktop
+          ansible.builtin.apt:
+            name: signal-desktop
+            state: present
+      rescue:
+        - name: Report Signal failure and continue
+          ansible.builtin.debug:
+            msg: "Signal Desktop skipped this run; it will be retried on the next ansible-pull."
+
+    - name: Add Flathub on running system
       community.general.flatpak_remote:
         name: flathub
         flatpakrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
         state: present
-      when: not ansible_is_chroot
+      when: not (ansible_is_chroot | bool)
 
-    - name: Ruim ongebruikte pakketten en cache op
+    - name: Autoremove obsolete packages
       ansible.builtin.apt:
         autoremove: true
         autoclean: true
-
-# =============================================
-# PLAY 6 — ansible-pull automatisering (systemd-timer)
-# =============================================
-# Zet pull_repo_url op "" om de timer uit te schakelen.
-- name: Ansible-pull dagelijks automatisch uitvoeren
-  hosts: localhost
-  connection: local
-  become: true
-
-  vars:
-    desktop_user: freeboot
-    pull_repo_url: https://github.com/henrydenhengst/debian13-infra.git
-    pull_branch: main
-    pull_playbook: local.yml
-    pull_on_calendar: daily      # systemd OnCalendar-formaat
-
-  tasks:
-    - name: Installeer ansible en git
-      ansible.builtin.apt:
-        name:
-          - ansible
-          - git
-        state: present
-      when: pull_repo_url | length > 0
-
-    # Geen --purge: met -o (alleen uitvoeren bij wijzigingen) heeft ansible-pull de checkout nodig.
-    - name: Plaats ansible-pull service
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=Ansible-pull configuratie-update
-          Wants=network-online.target
-          After=network-online.target
-
-          [Service]
-          Type=oneshot
-          TimeoutStartSec=3h
-          Environment=HOME=/root
-          ExecStart=/usr/bin/ansible-pull -U {{ pull_repo_url }} -C {{ pull_branch }} -i localhost, -o -e desktop_user={{ desktop_user }} {{ pull_playbook }}
-        dest: /etc/systemd/system/ansible-pull.service
-        owner: root
-        group: root
-        mode: "0644"
-      when: pull_repo_url | length > 0
-
-    - name: Plaats ansible-pull timer
-      ansible.builtin.copy:
-        content: |
-          [Unit]
-          Description=Ansible-pull periodiek uitvoeren
-
-          [Timer]
-          OnBootSec=15min
-          OnCalendar={{ pull_on_calendar }}
-          Persistent=true
-          RandomizedDelaySec=30min
-
-          [Install]
-          WantedBy=timers.target
-        dest: /etc/systemd/system/ansible-pull.timer
-        owner: root
-        group: root
-        mode: "0644"
-      when: pull_repo_url | length > 0
-
-    # In de installer-chroot: alleen enablen. De timer start vanzelf bij de eerste boot.
-    - name: Activeer de ansible-pull timer
-      ansible.builtin.systemd:
-        name: ansible-pull.timer
-        enabled: true
-        state: "{{ omit if ansible_is_chroot else 'started' }}"
-        daemon_reload: "{{ not ansible_is_chroot }}"
-      when: pull_repo_url | length > 0
